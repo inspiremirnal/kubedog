@@ -15,9 +15,12 @@ limitations under the License.
 package kube
 
 import (
+	"context"
 	"io/ioutil"
 	"path/filepath"
 	"testing"
+
+	rbacv1 "k8s.io/api/rbac/v1"
 
 	util "github.com/keikoproj/kubedog/internal/utilities"
 	"github.com/onsi/gomega"
@@ -375,18 +378,22 @@ func TestResourceInNamespace(t *testing.T) {
 			resource: "poddisruptionbudget",
 			name:     "test_pdb",
 		},
+		{
+			resource: "serviceaccount",
+			name:     "mock_service_account",
+		},
 	}
 
 	kc := Client{
 		KubeInterface: fakeKubeClient,
 	}
 
-	_, _ = kc.KubeInterface.CoreV1().Namespaces().Create(&v1.Namespace{
+	_, _ = kc.KubeInterface.CoreV1().Namespaces().Create(context.Background(), &v1.Namespace{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: namespace,
 		},
 		Status: v1.NamespaceStatus{Phase: v1.NamespaceActive},
-	})
+	}, metav1.CreateOptions{})
 
 	for _, tt := range tests {
 		t.Run(tt.resource, func(t *testing.T) {
@@ -396,21 +403,25 @@ func TestResourceInNamespace(t *testing.T) {
 
 			switch tt.resource {
 			case "deployment":
-				_, _ = kc.KubeInterface.AppsV1().Deployments(namespace).Create(&appsv1.Deployment{
+				_, _ = kc.KubeInterface.AppsV1().Deployments(namespace).Create(context.Background(), &appsv1.Deployment{
 					ObjectMeta: meta,
-				})
+				}, metav1.CreateOptions{})
 			case "service":
-				_, _ = kc.KubeInterface.CoreV1().Services(namespace).Create(&v1.Service{
+				_, _ = kc.KubeInterface.CoreV1().Services(namespace).Create(context.Background(), &v1.Service{
 					ObjectMeta: meta,
-				})
+				}, metav1.CreateOptions{})
 			case "hpa":
-				_, _ = kc.KubeInterface.AutoscalingV2beta2().HorizontalPodAutoscalers(namespace).Create(&hpa.HorizontalPodAutoscaler{
+				_, _ = kc.KubeInterface.AutoscalingV2beta2().HorizontalPodAutoscalers(namespace).Create(context.Background(), &hpa.HorizontalPodAutoscaler{
 					ObjectMeta: meta,
-				})
+				}, metav1.CreateOptions{})
 			case "pdb":
-				_, _ = kc.KubeInterface.PolicyV1beta1().PodDisruptionBudgets(namespace).Create(&policy.PodDisruptionBudget{
+				_, _ = kc.KubeInterface.PolicyV1beta1().PodDisruptionBudgets(namespace).Create(context.Background(), &policy.PodDisruptionBudget{
 					ObjectMeta: meta,
-				})
+				}, metav1.CreateOptions{})
+			case "serviceaccount":
+				_, _ = kc.KubeInterface.CoreV1().ServiceAccounts(namespace).Create(context.Background(), &v1.ServiceAccount{
+					ObjectMeta: meta,
+				}, metav1.CreateOptions{})
 			}
 			err = kc.ResourceInNamespace(tt.resource, tt.name, namespace)
 			g.Expect(err).ShouldNot(gomega.HaveOccurred())
@@ -432,24 +443,24 @@ func TestScaleDeployment(t *testing.T) {
 		KubeInterface: fakeKubeClient,
 	}
 
-	_, _ = kc.KubeInterface.CoreV1().Namespaces().Create(&v1.Namespace{
+	_, _ = kc.KubeInterface.CoreV1().Namespaces().Create(context.Background(), &v1.Namespace{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: namespace,
 		},
 		Status: v1.NamespaceStatus{Phase: v1.NamespaceActive},
-	})
+	}, metav1.CreateOptions{})
 
-	_, _ = kc.KubeInterface.AppsV1().Deployments(namespace).Create(&appsv1.Deployment{
+	_, _ = kc.KubeInterface.AppsV1().Deployments(namespace).Create(context.Background(), &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: deployName,
 		},
 		Spec: appsv1.DeploymentSpec{
 			Replicas: &replicaCount,
 		},
-	})
+	}, metav1.CreateOptions{})
 	err = kc.ScaleDeployment(deployName, namespace, 2)
 	g.Expect(err).ShouldNot(gomega.HaveOccurred())
-	s, _ := kc.KubeInterface.AppsV1().Deployments(namespace).GetScale(deployName, metav1.GetOptions{})
+	s, _ := kc.KubeInterface.AppsV1().Deployments(namespace).GetScale(context.Background(), deployName, metav1.GetOptions{})
 	g.Expect(s.Spec.Replicas).To(gomega.Equal(int32(2)))
 }
 
@@ -493,5 +504,54 @@ func addLabel(in *unstructured.Unstructured, key, value string) {
 	err := unstructured.SetNestedMap(in.Object, labels, "metadata", "labels")
 	if err != nil {
 		log.Errorf("Failed adding label %v=%v to the resource %v: %v", key, value, in.GetName(), err)
+	}
+}
+
+func TestClusterRoleAndBindingIsFound(t *testing.T) {
+	var (
+		err            error
+		g              = gomega.NewWithT(t)
+		fakeKubeClient = fake.NewSimpleClientset()
+	)
+
+	kc := Client{
+		KubeInterface: fakeKubeClient,
+	}
+
+	tests := []struct {
+		resource string
+		name     string
+	}{
+		{
+			resource: "clusterrole",
+			name:     "mock_cluster_role",
+		},
+		{
+			resource: "clusterrolebinding",
+			name:     "mock_cluster_role_binding",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.resource, func(t *testing.T) {
+			meta := metav1.ObjectMeta{
+				Name: tt.name,
+			}
+
+			switch tt.resource {
+			case "clusterrole":
+				_, _ = kc.KubeInterface.RbacV1().ClusterRoles().Create(context.Background(), &rbacv1.ClusterRole{
+
+					ObjectMeta: meta,
+				}, metav1.CreateOptions{})
+			case "clusterrolebinding":
+				_, _ = kc.KubeInterface.RbacV1().ClusterRoleBindings().Create(context.Background(), &rbacv1.ClusterRoleBinding{
+
+					ObjectMeta: meta,
+				}, metav1.CreateOptions{})
+			}
+			err = kc.ClusterRbacIsFound(tt.resource, tt.name)
+			g.Expect(err).ShouldNot(gomega.HaveOccurred())
+		})
 	}
 }
